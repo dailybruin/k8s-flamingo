@@ -1,0 +1,149 @@
+## Deployment
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-flamingo-deployment
+  namespace: default
+  labels:
+    app: flamingo-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flamingo-test
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      name: sample-flamingo-pod
+      labels:
+        app: flamingo-test
+    spec:
+      containers:
+      - name: flamingotested
+        image: registry.digitalocean.com/dailybruin/flamingotestedamd64:latest
+        imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 150m
+            memory: 230Mi
+          limits:
+            cpu: 250m
+            memory: 300Mi
+        ports: 
+          - containerPort: 1919
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /api/healthy
+            port: 1919
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      restartPolicy: Always
+---
+# Service
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: flamingo-service-test
+  labels:
+    app: flamingo-test
+spec:
+  selector:
+    app: flamingo-test
+  ports:
+    - protocol: TCP
+      port: 1919
+      targetPort: 1919
+---
+## Load Balancer
+
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kubernetes.digitalocean.com/load-balancer-id: "a2ff6de7-1816-40d7-92cd-602971e5fe1d"
+    kubernetes.digitalocean.com/load-balancer-name: "flamingo-k8s-load-balancer"
+    service.beta.kubernetes.io/do-loadbalancer-size-unit: "1"
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-port: "1919"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-protocol: "http"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-path: "/api/healthy"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-check-interval-seconds: "10"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-response-timeout-seconds: "10"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-unhealthy-threshold: "3"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-healthy-threshold: "5"
+  labels:
+    app: flamingo-test
+  name: flamingo-k8s-load-balancer
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: flamingo-test
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 1919
+---
+## Horizontal Pod Autoscaler
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: flamingo-hpa-test
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-flamingo-deployment
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+## Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: flamingo-tls
+    nginx.ingress.kubernetes.io/proxy-body-size: 20m
+  name: flamingo-tls-ingress
+  namespace: default
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: k8s.dailybruin.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: flamingo-service-test
+            port:
+              number: 1919
+        path: /
+        pathType: Prefix
+  tls:
+  - hosts:
+    - k8s.dailybruin.com
+    secretName: flamingo-tls
